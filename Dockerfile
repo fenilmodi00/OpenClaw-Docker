@@ -1,84 +1,65 @@
-# OpenClaw Docker 镜像
+# OpenClaw Docker Image - Generic AI Gateway
 FROM node:22-slim
 
-# 设置工作目录
+# Set working directory
 WORKDIR /app
 
-# 安装必要的系统依赖
+# Install system dependencies (brew requirements included)
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
-    chromium \
     curl \
-    fonts-liberation \
-    fonts-noto-cjk \
-    fonts-noto-color-emoji \
     git \
     gosu \
     jq \
-    python3 \
-    socat \
     tini \
-    websockify \
+    build-essential \
+    procps \
+    file \
   && rm -rf /var/lib/apt/lists/*
 
-# 更新 npm 到最新版本
-RUN npm install -g npm@latest
+# Update npm and install OpenClaw
+RUN npm install -g npm@latest \
+ && npm install -g openclaw@2026.2.6-3
 
-# 安装 OpenClaw 和 OpenCode AI
-RUN npm install -g openclaw@2026.2.6-3 opencode-ai@latest
+# Prepare Homebrew directories
+RUN mkdir -p /home/linuxbrew \
+ && chown -R node:node /home/linuxbrew
 
-# 安装 Playwright 和 Chromium
-RUN npm install -g playwright && npx playwright install chromium --with-deps
-
-# 安装 playwright-extra 和 puppeteer-extra-plugin-stealth
-RUN npm install -g playwright-extra puppeteer-extra-plugin-stealth
-
-# 安装 bird
-RUN npm install -g @steipete/bird
-
-# 创建配置目录并设置权限
-RUN mkdir -p /home/node/.openclaw/workspace && \
-    chown -R node:node /home/node
-
-# 切换到 node 用户安装插件
+# Switch to node user for Homebrew install
 USER node
 
-# 安装飞书插件 - 使用 timeout 防止卡住，忽略错误继续构建
-RUN timeout 300 openclaw plugins install @m1heng-clawd/feishu || true
+# Install Homebrew (Linuxbrew) as non-root
+ENV NONINTERACTIVE=1
+RUN bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# 安装钉钉插件 - 使用 timeout 防止卡住，忽略错误继续构建
-RUN timeout 300 openclaw plugins install https://github.com/soimy/clawdbot-channel-dingtalk.git || true
+# Set Homebrew environment
+ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew \
+    HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar \
+    HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew \
+    PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH
 
-# 安装 QQ 机器人插件 - 使用 timeout 防止卡住，忽略错误继续构建
-RUN cd /tmp && \
-    git clone https://github.com/justlovemaki/qqbot.git && \
-    cd qqbot && \
-    timeout 300 openclaw plugins install . || true
-
-# 安装企业微信插件 - 使用 timeout 防止卡住，忽略错误继续构建
-RUN timeout 300 openclaw plugins install @sunnoy/wecom || true
-
-# 切换回 root 用户继续后续操作
+# Switch back to root
 USER root
 
-# 确保 extensions 目录权限正确（排除 node_modules 以加快构建速度）
-RUN find /home/node/.openclaw/extensions -type d -name node_modules -prune -o -exec chown node:node {} +
+# Create OpenClaw workspace
+RUN mkdir -p /home/node/.openclaw/workspace \
+ && chown -R node:node /home/node
 
-# 复制初始化脚本
+# Copy initialization script
 COPY ./init.sh /usr/local/bin/init.sh
 RUN chmod +x /usr/local/bin/init.sh
 
-# 设置基础环境变量
+# Base environment
 ENV HOME=/home/node \
     TERM=xterm-256color
 
-# 暴露端口
+# Expose OpenClaw ports
 EXPOSE 18789 18790
 
-# 设置工作目录为 home
+# Switch to home
 WORKDIR /home/node
 
-# 使用初始化脚本作为入口点（以 root 运行以便修复权限）
-ENTRYPOINT ["/bin/bash", "/usr/local/bin/init.sh"]
+# Entrypoint
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "/usr/local/bin/init.sh"]

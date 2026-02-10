@@ -2,70 +2,57 @@
 
 set -e
 
-echo "=== OpenClaw 初始化脚本 ==="
+echo "=== OpenClaw Initialization ==="
 
 OPENCLAW_HOME="/home/node/.openclaw"
 OPENCLAW_WORKSPACE="${WORKSPACE:-/home/node/.openclaw/workspace}"
 NODE_UID="$(id -u node)"
 NODE_GID="$(id -g node)"
 
-# 创建必要目录
+# Create necessary directories
 mkdir -p "$OPENCLAW_HOME" "$OPENCLAW_WORKSPACE"
 
-# 预检查挂载卷权限（避免同样命令偶发 Permission denied）
+# Pre-check mount volume permissions
 if [ "$(id -u)" -eq 0 ]; then
     CURRENT_OWNER="$(stat -c '%u:%g' "$OPENCLAW_HOME" 2>/dev/null || echo unknown:unknown)"
-    echo "挂载目录: $OPENCLAW_HOME"
-    echo "当前所有者(UID:GID): $CURRENT_OWNER"
-    echo "目标所有者(UID:GID): ${NODE_UID}:${NODE_GID}"
+    echo "Mount directory: $OPENCLAW_HOME"
+    echo "Current owner (UID:GID): $CURRENT_OWNER"
+    echo "Target owner (UID:GID): ${NODE_UID}:${NODE_GID}"
 
     if [ "$CURRENT_OWNER" != "${NODE_UID}:${NODE_GID}" ]; then
-        echo "检测到宿主机挂载目录所有者与容器运行用户不一致，尝试自动修复..."
+        echo "Detected ownership mismatch, attempting to fix..."
         chown -R node:node "$OPENCLAW_HOME" || true
     fi
 
-    # 再次验证写权限，失败则给出明确诊断
+    # Verify write permissions
     if ! gosu node test -w "$OPENCLAW_HOME"; then
-        echo "❌ 权限检查失败：node 用户无法写入 $OPENCLAW_HOME"
-        echo "请在宿主机执行（Linux）："
+        echo "❌ Permission check failed: node user cannot write to $OPENCLAW_HOME"
+        echo "Please run on host (Linux):"
         echo "  sudo chown -R ${NODE_UID}:${NODE_GID} <your-openclaw-data-dir>"
-        echo "或在启动时显式指定用户："
+        echo "Or specify user at startup:"
         echo "  docker run --user \$(id -u):\$(id -g) ..."
-        echo "若宿主机启用了 SELinux，请在挂载卷后添加 :z 或 :Z"
+        echo "If SELinux is enabled, add :z or :Z to volume mount"
         exit 1
     fi
 fi
 
-# 检查配置文件是否存在，如果不存在则生成
+# Check if config file exists, generate if not
 if [ ! -f /home/node/.openclaw/openclaw.json ]; then
-    echo "生成配置文件..."
+    echo "Generating configuration file..."
     
-    # 从环境变量读取配置参数
+    # Read configuration from environment variables
     MODEL_ID="${MODEL_ID}"
     BASE_URL="${BASE_URL}"
     API_KEY="${API_KEY}"
     API_PROTOCOL="${API_PROTOCOL:-openai-completions}"
     CONTEXT_WINDOW="${CONTEXT_WINDOW:-200000}"
     MAX_TOKENS="${MAX_TOKENS:-8192}"
-    
-    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
-    FEISHU_APP_ID="${FEISHU_APP_ID}"
-    FEISHU_APP_SECRET="${FEISHU_APP_SECRET}"
-    DINGTALK_CLIENT_ID="${DINGTALK_CLIENT_ID}"
-    DINGTALK_CLIENT_SECRET="${DINGTALK_CLIENT_SECRET}"
-    DINGTALK_ROBOT_CODE="${DINGTALK_ROBOT_CODE:-$DINGTALK_CLIENT_ID}"
-    DINGTALK_CORP_ID="${DINGTALK_CORP_ID}"
-    DINGTALK_AGENT_ID="${DINGTALK_AGENT_ID}"
-    QQBOT_APP_ID="${QQBOT_APP_ID}"
-    QQBOT_CLIENT_SECRET="${QQBOT_CLIENT_SECRET}"
-    WECOM_TOKEN="${WECOM_TOKEN}"
-    WECOM_ENCODING_AES_KEY="${WECOM_ENCODING_AES_KEY}"
     WORKSPACE="${WORKSPACE}"
     OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT}"
     OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND}"
     OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN}"
     
-    # 生成配置文件
+    # Generate configuration file
     cat > /home/node/.openclaw/openclaw.json <<EOF
 {
   "meta": {
@@ -74,12 +61,6 @@ if [ ! -f /home/node/.openclaw/openclaw.json ]; then
   },
   "update": {
     "checkOnStart": false
-  },
-  "browser": {
-    "headless": true,
-    "noSandbox": true,
-    "defaultProfile": "openclaw",
-    "executablePath": "/usr/bin/chromium"
   },
   "models": {
     "mode": "merge",
@@ -126,112 +107,11 @@ if [ ! -f /home/node/.openclaw/openclaw.json ]; then
       }
     }
   },
-  "messages": {
-    "ackReactionScope": "group-mentions",
-    "tts": {
-      "edge": {
-        "voice": "zh-CN-XiaoxiaoNeural"
-      }
-    }
-  },
   "commands": {
     "native": "auto",
     "nativeSkills": "auto"
   },
-  "channels": {
-EOF
-
-    # 添加 Telegram 配置（如果提供了 token）
-    FIRST_CHANNEL=true
-    if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-    "telegram": {
-      "dmPolicy": "pairing",
-      "botToken": "$TELEGRAM_BOT_TOKEN",
-      "groupPolicy": "allowlist",
-      "streamMode": "partial"
-    }
-EOF
-        FIRST_CHANNEL=false
-    fi
-
-    # 添加飞书配置（如果提供了 APP_ID 和 APP_SECRET）
-    if [ -n "$FEISHU_APP_ID" ] && [ -n "$FEISHU_APP_SECRET" ]; then
-        if [ "$FIRST_CHANNEL" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-    "feishu": {
-      "enabled": true,
-      "connectionMode": "websocket",
-      "dmPolicy": "pairing",
-      "groupPolicy": "allowlist",
-      "requireMention": true,
-      "appId": "$FEISHU_APP_ID",
-      "appSecret": "$FEISHU_APP_SECRET"
-    }
-EOF
-        FIRST_CHANNEL=false
-    fi
-
-    # 添加钉钉配置（如果提供了 CLIENT_ID 和 CLIENT_SECRET）
-    if [ -n "$DINGTALK_CLIENT_ID" ] && [ -n "$DINGTALK_CLIENT_SECRET" ]; then
-        if [ "$FIRST_CHANNEL" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-    "dingtalk": {
-      "enabled": true,
-      "clientId": "$DINGTALK_CLIENT_ID",
-      "clientSecret": "$DINGTALK_CLIENT_SECRET",
-      "robotCode": "$DINGTALK_ROBOT_CODE",
-      "corpId": "$DINGTALK_CORP_ID",
-      "agentId": "$DINGTALK_AGENT_ID",
-      "dmPolicy": "open",
-      "groupPolicy": "open",
-      "messageType": "markdown",
-      "debug": false
-    }
-EOF
-        FIRST_CHANNEL=false
-    fi
-
-    # 添加 QQ 机器人配置（如果提供了 APP_ID 和 CLIENT_SECRET）
-    if [ -n "$QQBOT_APP_ID" ] && [ -n "$QQBOT_CLIENT_SECRET" ]; then
-        if [ "$FIRST_CHANNEL" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-    "qqbot": {
-      "enabled": true,
-      "appId": "$QQBOT_APP_ID",
-      "clientSecret": "$QQBOT_CLIENT_SECRET"
-    }
-EOF
-        FIRST_CHANNEL=false
-    fi
-
-    # 添加企业微信配置（如果提供了必需参数）
-    if [ -n "$WECOM_TOKEN" ] && [ -n "$WECOM_ENCODING_AES_KEY" ]; then
-        if [ "$FIRST_CHANNEL" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-    "wecom": {
-      "enabled": true,
-      "token": "$WECOM_TOKEN",
-      "encodingAesKey": "$WECOM_ENCODING_AES_KEY",
-      "commands": {
-        "enabled": true,
-        "allowlist": ["/new", "/status", "/help", "/compact"]
-      }
-    }
-EOF
-    fi
-
-    # 关闭 channels 对象
-    cat >> /home/node/.openclaw/openclaw.json <<EOF
-  },
+  "channels": {},
   "gateway": {
     "port": $OPENCLAW_GATEWAY_PORT,
     "mode": "local",
@@ -245,190 +125,57 @@ EOF
     }
   },
   "plugins": {
-    "entries": {
-EOF
-
-    # 添加 Telegram 插件配置（如果提供了 token）
-    FIRST_PLUGIN=true
-    if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "telegram": {
-        "enabled": true
-      }
-EOF
-        FIRST_PLUGIN=false
-    fi
-
-    # 添加飞书插件配置（如果提供了 APP_ID 和 APP_SECRET）
-    if [ -n "$FEISHU_APP_ID" ] && [ -n "$FEISHU_APP_SECRET" ]; then
-        if [ "$FIRST_PLUGIN" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "feishu": {
-        "enabled": true
-      }
-EOF
-        FIRST_PLUGIN=false
-    fi
-
-    # 添加钉钉插件配置（如果提供了 CLIENT_ID 和 CLIENT_SECRET）
-    if [ -n "$DINGTALK_CLIENT_ID" ] && [ -n "$DINGTALK_CLIENT_SECRET" ]; then
-        if [ "$FIRST_PLUGIN" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "dingtalk": {
-        "enabled": true
-      }
-EOF
-        FIRST_PLUGIN=false
-    fi
-
-    # 添加 QQ 机器人插件配置（如果提供了 APP_ID 和 CLIENT_SECRET）
-    if [ -n "$QQBOT_APP_ID" ] && [ -n "$QQBOT_CLIENT_SECRET" ]; then
-        if [ "$FIRST_PLUGIN" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "qqbot": {
-        "enabled": true
-      }
-EOF
-        FIRST_PLUGIN=false
-    fi
-
-    # 添加企业微信插件配置（如果提供了必需参数）
-    if [ -n "$WECOM_TOKEN" ] && [ -n "$WECOM_ENCODING_AES_KEY" ]; then
-        if [ "$FIRST_PLUGIN" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "wecom": {
-        "enabled": true
-      }
-EOF
-    fi
-
-    # 关闭 entries 对象
-    cat >> /home/node/.openclaw/openclaw.json <<EOF
-    },
-    "installs": {
-EOF
-
-    # 添加飞书插件安装信息（如果提供了 APP_ID 和 APP_SECRET）
-    FIRST_INSTALL=true
-    if [ -n "$FEISHU_APP_ID" ] && [ -n "$FEISHU_APP_SECRET" ]; then
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "feishu": {
-        "source": "npm",
-        "spec": "@m1heng-clawd/feishu",
-        "installPath": "/home/node/.openclaw/extensions/feishu",
-        "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
-      }
-EOF
-        FIRST_INSTALL=false
-    fi
-
-    # 添加钉钉插件安装信息（如果提供了 CLIENT_ID 和 CLIENT_SECRET）
-    if [ -n "$DINGTALK_CLIENT_ID" ] && [ -n "$DINGTALK_CLIENT_SECRET" ]; then
-        if [ "$FIRST_INSTALL" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "dingtalk": {
-        "source": "npm",
-        "spec": "https://github.com/soimy/clawdbot-channel-dingtalk.git",
-        "installPath": "/home/node/.openclaw/extensions/dingtalk",
-        "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
-      }
-EOF
-        FIRST_INSTALL=false
-    fi
-
-    # 添加 QQ 机器人插件安装信息（如果提供了 APP_ID 和 CLIENT_SECRET）
-    if [ -n "$QQBOT_APP_ID" ] && [ -n "$QQBOT_CLIENT_SECRET" ]; then
-        if [ "$FIRST_INSTALL" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "qqbot": {
-        "source": "path",
-        "sourcePath": "/home/node/.openclaw/qqbot",
-        "installPath": "/home/node/.openclaw/extensions/qqbot",
-        "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
-      }
-EOF
-        FIRST_INSTALL=false
-    fi
-
-    # 添加企业微信插件安装信息（如果提供了必需参数）
-    if [ -n "$WECOM_TOKEN" ] && [ -n "$WECOM_ENCODING_AES_KEY" ]; then
-        if [ "$FIRST_INSTALL" = false ]; then
-            echo "," >> /home/node/.openclaw/openclaw.json
-        fi
-        cat >> /home/node/.openclaw/openclaw.json <<EOF
-      "wecom": {
-        "source": "npm",
-        "spec": "@sunnoy/wecom",
-        "installPath": "/home/node/.openclaw/extensions/wecom",
-        "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
-      }
-EOF
-    fi
-
-    # 关闭 installs 和 plugins 对象
-    cat >> /home/node/.openclaw/openclaw.json <<EOF
-    }
+    "entries": {},
+    "installs": {}
   }
 }
 EOF
 
-    echo "✅ 配置文件已生成"
+    echo "✅ Configuration file generated"
 else
-    echo "配置文件已存在，跳过生成"
+    echo "Configuration file exists, skipping generation"
 fi
 
-# 确保所有文件和目录的权限正确（仅 root 可执行）
+# Ensure correct permissions (root only)
 if [ "$(id -u)" -eq 0 ]; then
     chown -R node:node "$OPENCLAW_HOME" || true
 fi
 
-echo "=== 初始化完成 ==="
-echo "当前使用模型: default/$MODEL_ID"
-echo "API 协议: ${API_PROTOCOL:-openai-completions}"
+echo "=== Initialization Complete ==="
+echo "Model: default/$MODEL_ID"
+echo "API Protocol: ${API_PROTOCOL:-openai-completions}"
 echo "Base URL: ${BASE_URL}"
-echo "上下文窗口: ${CONTEXT_WINDOW:-200000}"
-echo "最大 Tokens: ${MAX_TOKENS:-8192}"
-echo "Gateway 端口: $OPENCLAW_GATEWAY_PORT"
-echo "Gateway 绑定: $OPENCLAW_GATEWAY_BIND"
+echo "Context Window: ${CONTEXT_WINDOW:-200000}"
+echo "Max Tokens: ${MAX_TOKENS:-8192}"
+echo "Gateway Port: $OPENCLAW_GATEWAY_PORT"
+echo "Gateway Bind: $OPENCLAW_GATEWAY_BIND"
 
-# 启动 OpenClaw Gateway（切换到 node 用户）
-echo "=== 启动 OpenClaw Gateway ==="
+# Start OpenClaw Gateway (switch to node user)
+echo "=== Starting OpenClaw Gateway ==="
 
-# 定义清理函数
+# Define cleanup function
 cleanup() {
-    echo "=== 接收到停止信号,正在关闭服务 ==="
+    echo "=== Received stop signal, shutting down ==="
     if [ -n "$GATEWAY_PID" ]; then
         kill -TERM "$GATEWAY_PID" 2>/dev/null || true
         wait "$GATEWAY_PID" 2>/dev/null || true
     fi
-    echo "=== 服务已停止 ==="
+    echo "=== Service stopped ==="
     exit 0
 }
 
-# 捕获终止信号
+# Trap termination signals
 trap cleanup SIGTERM SIGINT SIGQUIT
 
-# 在后台启动 OpenClaw Gateway 作为子进程
+# Start OpenClaw Gateway in background as subprocess
 gosu node env HOME=/home/node openclaw gateway --verbose &
 GATEWAY_PID=$!
 
-echo "=== OpenClaw Gateway 已启动 (PID: $GATEWAY_PID) ==="
+echo "=== OpenClaw Gateway started (PID: $GATEWAY_PID) ==="
 
-# 主进程等待子进程
+# Main process waits for subprocess
 wait "$GATEWAY_PID"
 EXIT_CODE=$?
 
-echo "=== OpenClaw Gateway 已退出 (退出码: $EXIT_CODE) ==="
+echo "=== OpenClaw Gateway exited (exit code: $EXIT_CODE) ==="
 exit $EXIT_CODE
