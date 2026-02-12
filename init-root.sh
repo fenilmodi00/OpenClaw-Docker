@@ -1,40 +1,18 @@
 #!/bin/bash
 
+# OpenClaw Initialization Script (ROOT MODE)
+# Runs OpenClaw as ROOT user for full system access.
+
 set -e
 
-echo "=== OpenClaw Initialization ==="
+echo "=== OpenClaw Initialization (ROOT) ==="
 
-OPENCLAW_HOME="/home/node/.openclaw"
-OPENCLAW_WORKSPACE="${WORKSPACE:-/home/node/.openclaw/workspace}"
-NODE_UID="$(id -u node)"
-NODE_GID="$(id -g node)"
+# Define paths for Root
+OPENCLAW_HOME="/root/.openclaw"
+OPENCLAW_WORKSPACE="${WORKSPACE:-/root/.openclaw/workspace}"
 
-# Create necessary directories
+# Ensure directories exist
 mkdir -p "$OPENCLAW_HOME" "$OPENCLAW_WORKSPACE"
-
-# Pre-check mount volume permissions
-if [ "$(id -u)" -eq 0 ]; then
-    CURRENT_OWNER="$(stat -c '%u:%g' "$OPENCLAW_HOME" 2>/dev/null || echo unknown:unknown)"
-    echo "Mount directory: $OPENCLAW_HOME"
-    echo "Current owner (UID:GID): $CURRENT_OWNER"
-    echo "Target owner (UID:GID): ${NODE_UID}:${NODE_GID}"
-
-    if [ "$CURRENT_OWNER" != "${NODE_UID}:${NODE_GID}" ]; then
-        echo "Detected ownership mismatch, attempting to fix..."
-        chown -R node:node "$OPENCLAW_HOME" || true
-    fi
-
-    # Verify write permissions
-    if ! gosu node test -w "$OPENCLAW_HOME"; then
-        echo "❌ Permission check failed: node user cannot write to $OPENCLAW_HOME"
-        echo "Please run on host (Linux):"
-        echo "  sudo chown -R ${NODE_UID}:${NODE_GID} <your-openclaw-data-dir>"
-        echo "Or specify user at startup:"
-        echo "  docker run --user \$(id -u):\$(id -g) ..."
-        echo "If SELinux is enabled, add :z or :Z to volume mount"
-        exit 1
-    fi
-fi
 
 # Check if config file exists, validate, and regenerate if necessary
 CONFIG_FILE="$OPENCLAW_HOME/openclaw.json"
@@ -49,21 +27,18 @@ else
         echo "⚠️  Existing configuration file is invalid/corrupted JSON. Regenerating..."
         SHOULD_GENERATE=true
     else
-        echo "✅  Existing configuration file is valid JSON."
+        # EXISTING CONFIG VALIDATION
+        # Check if critical configuration (Gateway Token) is present
+        EXISTING_TOKEN=$(jq -r '.gateway.auth.token // empty' "$CONFIG_FILE")
+        
+        if [ -z "$EXISTING_TOKEN" ] || [ "$EXISTING_TOKEN" = "null" ]; then
+             echo "⚠️ Existing configuration missing gateway token. Regenerating..."
+             SHOULD_GENERATE=true
+        else
+             echo "✅  Existing configuration file is valid JSON."
+        fi
     fi
 fi
-
-# Read configuration from environment variables (with defaults)
-MODEL_ID="${MODEL_ID}"
-BASE_URL="${BASE_URL}"
-API_KEY="${API_KEY}"
-API_PROTOCOL="${API_PROTOCOL:-openai-completions}"
-CONTEXT_WINDOW="${CONTEXT_WINDOW:-200000}"
-MAX_TOKENS="${MAX_TOKENS:-8192}"
-WORKSPACE="${WORKSPACE}"
-OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-3000}"
-OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-0.0.0.0}"
-OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN}"
 
 if [ "$SHOULD_GENERATE" = true ]; then
     echo "Generating configuration file using jq..."
@@ -74,8 +49,23 @@ if [ "$SHOULD_GENERATE" = true ]; then
         exit 1
     fi
 
+    # Read configuration from environment variables (with defaults)
+    MODEL_ID="${MODEL_ID}"
+    BASE_URL="${BASE_URL}"
+    API_KEY="${API_KEY}"
+    API_PROTOCOL="${API_PROTOCOL:-openai-completions}"
+    CONTEXT_WINDOW="${CONTEXT_WINDOW:-200000}"
+    MAX_TOKENS="${MAX_TOKENS:-8192}"
+    WORKSPACE="${OPENCLAW_WORKSPACE}" 
+    OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-3000}"
+    OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-0.0.0.0}"
+    OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN}"
+    
+    # Telegram Configuration
+    TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-false}"
+    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+    
     # Generate JSON content safely with jq
-    # Using a temporary file ensures atomic write
     TEMP_CONFIG="$(mktemp)"
     
     jq -n \
@@ -89,6 +79,8 @@ if [ "$SHOULD_GENERATE" = true ]; then
       --argjson gateway_port "$OPENCLAW_GATEWAY_PORT" \
       --arg gateway_bind "$OPENCLAW_GATEWAY_BIND" \
       --arg gateway_token "$OPENCLAW_GATEWAY_TOKEN" \
+      --arg telegram_enabled "$TELEGRAM_ENABLED" \
+      --arg telegram_token "$TELEGRAM_BOT_TOKEN" \
       --arg date "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")" \
       '{
         "meta": {
@@ -147,7 +139,12 @@ if [ "$SHOULD_GENERATE" = true ]; then
           "native": "auto",
           "nativeSkills": "auto"
         },
-        "channels": {},
+        "channels": (if ($telegram_enabled == "true" and ($telegram_token | length > 0)) then {
+          "telegram": {
+            "botToken": $telegram_token,
+            "polling": true
+          }
+        } else {} end),
         "gateway": {
           "port": $gateway_port,
           "mode": "local",
@@ -161,18 +158,10 @@ if [ "$SHOULD_GENERATE" = true ]; then
           }
         },
         "plugins": {
-          "entries": {
-            "telegram": {
-              "enabled": true
-            },
-            "whatsapp": {
-              "enabled": true
-            }
-          },
+          "entries": {},
           "installs": {}
         }
-      }
-' > "$TEMP_CONFIG"
+      }' > "$TEMP_CONFIG"
 
     if [ $? -eq 0 ] && jq empty "$TEMP_CONFIG" >/dev/null 2>&1; then
         mv "$TEMP_CONFIG" "$CONFIG_FILE"
@@ -183,41 +172,14 @@ if [ "$SHOULD_GENERATE" = true ]; then
         exit 1
     fi
 else
-    echo "Configuration file exists, updating gateway token if provided..."
-    
-    # Always update gateway token from environment variable if set
-    if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
-        TEMP_CONFIG="$(mktemp)"
-        jq --arg token "$OPENCLAW_GATEWAY_TOKEN" '.gateway.auth.token = $token' "$CONFIG_FILE" > "$TEMP_CONFIG"
-        
-        if [ $? -eq 0 ] && jq empty "$TEMP_CONFIG" >/dev/null 2>&1; then
-            mv "$TEMP_CONFIG" "$CONFIG_FILE"
-            echo "✅ Gateway token updated in configuration."
-        else
-            echo "❌ Failed to update gateway token."
-            rm -f "$TEMP_CONFIG"
-        fi
-    else
-        echo "⚠️  OPENCLAW_GATEWAY_TOKEN not set, skipping token update."
-    fi
-fi
-
-# Ensure correct permissions (root only)
-if [ "$(id -u)" -eq 0 ]; then
-    chown -R node:node "$OPENCLAW_HOME" || true
+    echo "Skipping configuration generation."
 fi
 
 echo "=== Initialization Complete ==="
 echo "Model: default/$MODEL_ID"
-echo "API Protocol: ${API_PROTOCOL:-openai-completions}"
-echo "Base URL: ${BASE_URL}"
-echo "Context Window: ${CONTEXT_WINDOW:-200000}"
-echo "Max Tokens: ${MAX_TOKENS:-8192}"
-echo "Gateway Port: $OPENCLAW_GATEWAY_PORT"
-echo "Gateway Bind: $OPENCLAW_GATEWAY_BIND"
-
-# Start OpenClaw Gateway (switch to node user)
-echo "=== Starting OpenClaw Gateway ==="
+echo "Protocol: ${API_PROTOCOL}"
+echo "Running as User: $(whoami)"
+echo "Home Directory: $HOME"
 
 # Define cleanup function
 cleanup() {
@@ -226,22 +188,19 @@ cleanup() {
         kill -TERM "$GATEWAY_PID" 2>/dev/null || true
         wait "$GATEWAY_PID" 2>/dev/null || true
     fi
-    echo "=== Service stopped ==="
     exit 0
 }
 
 # Trap termination signals
 trap cleanup SIGTERM SIGINT SIGQUIT
 
-# Start OpenClaw Gateway in background as subprocess
-gosu node env HOME=/home/node openclaw gateway --verbose &
+# Start OpenClaw Gateway directly as current user (ROOT)
+echo "=== Starting OpenClaw Gateway ==="
+openclaw gateway --verbose &
 GATEWAY_PID=$!
 
 echo "=== OpenClaw Gateway started (PID: $GATEWAY_PID) ==="
-
-# Main process waits for subprocess
 wait "$GATEWAY_PID"
 EXIT_CODE=$?
-
 echo "=== OpenClaw Gateway exited (exit code: $EXIT_CODE) ==="
 exit $EXIT_CODE

@@ -1,0 +1,92 @@
+# OpenClaw Lightweight Docker Image
+# Optimized for size while maintaining full capability (Browsers + Homebrew + NPM)
+# 
+# Optimization Strategy:
+# 1. Layer Consolidation: Combine related RUN commands to reduce image layer overhead.
+# 2. Cleanup: Aggressive removal of cache and temporary files in the same layer they are created.
+# 3. Base Image: strict usage of node:22-slim.
+
+FROM node:22-slim
+
+# System Setup & Environment Variables
+ENV NODE_ENV=production \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    HOME=/home/node \
+    NODE_PATH=/usr/local/lib/node_modules \
+    TERM=xterm-256color \
+    # Homebrew Environment Variables
+    NONINTERACTIVE=1 \
+    HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew \
+    HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar \
+    HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
+
+# Add Homebrew to PATH
+ENV PATH=$HOMEBREW_PREFIX/bin:$HOMEBREW_PREFIX/sbin:$PATH
+
+WORKDIR /app
+
+# --- Combined Install Layer ---
+# Installs System Deps, OpenClaw, Playwright, and Homebrew in one optimized flow
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    python3 \
+    socat \
+    tini \
+    websockify \
+    build-essential \
+    procps \
+    file \
+    # Dependencies often needed for Homebrew
+    ruby \
+    \
+    # 1. Install OpenClaw & NPM Tools
+    && npm install -g npm@latest \
+    && npm install -g openclaw@latest opencode-ai@latest \
+    && npm install -g playwright playwright-extra puppeteer-extra-plugin-stealth @steipete/bird \
+    \
+    # 2. Install Playwright Browsers (Chromium only for size)
+    && mkdir -p $PLAYWRIGHT_BROWSERS_PATH \
+    && npx playwright install chromium --with-deps \
+    \
+    # 3. Prepare Homebrew Directory (Required for non-root install)
+    && mkdir -p /home/linuxbrew \
+    && chown -R node:node /home/linuxbrew \
+    \
+    # 4. Clean up apt cache to reduce layer size
+    && rm -rf /var/lib/apt/lists/*
+
+# --- User Switching for Homebrew ---
+# Homebrew strictly forbids running as root, so we switch context just for this install
+USER node
+
+# Install Homebrew
+RUN bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+    # Optional: cleanup Homebrew cache immediately
+    && rm -rf /home/node/.cache/Homebrew
+
+# Switch back to root to finalize permissions and entrypoint
+USER root
+
+# Finalize Workspace & Permissions (Root owned)
+RUN mkdir -p /root/.openclaw/workspace \
+    # Ensure Playwright folder is accessible
+    && chmod -R 775 $PLAYWRIGHT_BROWSERS_PATH \
+    # Ensure Global Node Modules are accessible
+    && chmod -R 775 /usr/local/lib/node_modules
+
+# Copy initialization script (Root version)
+COPY ./init-root.sh /usr/local/bin/init.sh
+RUN chmod +x /usr/local/bin/init.sh
+
+# Environment Setup
+ENV HOME=/root
+WORKDIR /root
+EXPOSE 18789 18790
+
+# Entrypoint
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "/usr/local/bin/init.sh"]

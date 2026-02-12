@@ -1,0 +1,36 @@
+services:
+  openclaw-gateway-root:
+    container_name: openclaw-gateway-root
+    image: ${OPENCLAW_IMAGE}
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    # Keep as root (default for this image/script)
+    user: root
+    environment:
+      HOME: /root
+      TERM: xterm-256color
+      # Model configuration
+      MODEL_ID: ${MODEL_ID}
+      BASE_URL: ${BASE_URL}
+      API_KEY: ${API_KEY}
+      API_PROTOCOL: ${API_PROTOCOL}
+      CONTEXT_WINDOW: ${CONTEXT_WINDOW}
+      MAX_TOKENS: ${MAX_TOKENS}
+      # Workspace configuration
+      WORKSPACE: /root/.openclaw/workspace # Default for root image
+      # Gateway configuration
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND}
+      OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT}
+      OPENCLAW_BRIDGE_PORT: ${OPENCLAW_BRIDGE_PORT}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED}
+    volumes:
+      - ${OPENCLAW_DATA_DIR}:/root/.openclaw
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT}:18789"
+      - "${OPENCLAW_BRIDGE_PORT}:18790"
+    restart: unless-stopped

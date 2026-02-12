@@ -1,0 +1,32 @@
+# Environment variables
+.env
+
+# Docker
+*.env.docker
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+build/

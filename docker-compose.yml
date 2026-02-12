@@ -28,10 +28,10 @@ services:
       OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT}
       OPENCLAW_BRIDGE_PORT: ${OPENCLAW_BRIDGE_PORT}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED}
     volumes:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
     ports:
       - "${OPENCLAW_GATEWAY_PORT}:18789"
       - "${OPENCLAW_BRIDGE_PORT}:18790"
-    init: true
     restart: unless-stopped
