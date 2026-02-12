@@ -171,8 +171,7 @@ if [ "$SHOULD_GENERATE" = true ]; then
           },
           "installs": {}
         }
-      }
-' > "$TEMP_CONFIG"
+      }' > "$TEMP_CONFIG"
 
     if [ $? -eq 0 ] && jq empty "$TEMP_CONFIG" >/dev/null 2>&1; then
         mv "$TEMP_CONFIG" "$CONFIG_FILE"
